@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Demo - {{ sim_code }}{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h2 class="mb-4">
+            {% if replay_mode %}Replay{% else %}Demo{% endif %}: {{ sim_code }}
+        </h2>
+
+        <!-- Game Container -->
+        <div id="game-container" class="mb-4" style="min-height: 500px; background-color: #333;">
+            <div class="d-flex justify-content-center align-items-center h-100">
+                <div class="text-white text-center p-4">
+                    <div class="spinner-border mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p>Loading demo...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="d-flex justify-content-center align-items-center mb-4">
+            <button class="btn btn-primary me-2" id="btn-prev">Previous</button>
+            <span class="mx-3">Step: <strong id="current-step">{{ step }}</strong></span>
+            <button class="btn btn-primary ms-2" id="btn-next">Next</button>
+        </div>
+
+        <!-- Speed Control -->
+        <div class="d-flex justify-content-center align-items-center">
+            <label class="me-3">Playback Speed:</label>
+            <input type="range" class="form-range" style="width: 200px" id="speed-slider"
+                   min="1" max="10" value="{{ play_speed }}">
+            <span class="ms-2" id="speed-value">{{ play_speed }}x</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
+<script>
+const simCode = "{{ sim_code }}";
+let currentStep = {{ step }};
+const playSpeed = {{ play_speed }};
+
+document.getElementById('btn-prev').addEventListener('click', () => {
+    if (currentStep > 0) {
+        currentStep--;
+        document.getElementById('current-step').textContent = currentStep;
+        // Load previous step
+    }
+});
+
+document.getElementById('btn-next').addEventListener('click', () => {
+    currentStep++;
+    document.getElementById('current-step').textContent = currentStep;
+    // Load next step
+});
+
+document.getElementById('speed-slider').addEventListener('input', (e) => {
+    document.getElementById('speed-value').textContent = e.target.value + 'x';
+});
+</script>
+{% endblock %}

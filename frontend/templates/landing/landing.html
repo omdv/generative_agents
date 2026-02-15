@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Generative Agents - Home{% endblock %}
+
+{% block content %}
+<div class="text-center py-5">
+    <h1 class="display-4 mb-4">Generative Agents</h1>
+    <p class="lead mb-4">
+        Interactive Simulacra of Human Behavior
+    </p>
+    <p class="text-muted mb-5">
+        A simulation environment where AI agents live, plan, and interact with each other.
+    </p>
+
+    <div class="row justify-content-center">
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <h5 class="card-title">Start Simulation</h5>
+                    <p class="card-text">Launch a new simulation with AI agents in The Ville.</p>
+                    <a href="{% url 'simulator_home' %}" class="btn btn-primary">Open Simulator</a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <h5 class="card-title">API Access</h5>
+                    <p class="card-text">Control the simulation programmatically via REST API.</p>
+                    <a href="/api/simulation/state" class="btn btn-outline-primary">View API</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-5">
+    <div class="col-md-6">
+        <h3>About</h3>
+        <p>
+            Generative Agents are computational software agents that simulate believable human behavior.
+            Each agent has a unique personality, memories, and daily routines. They perceive their
+            environment, remember their experiences, and plan their actions accordingly.
+        </p>
+    </div>
+    <div class="col-md-6">
+        <h3>Features</h3>
+        <ul>
+            <li>Autonomous agent behavior powered by LLMs</li>
+            <li>Memory system with recency, relevance, and importance</li>
+            <li>Natural language conversations between agents</li>
+            <li>Reflection and insight formation</li>
+            <li>Real-time WebSocket updates</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}

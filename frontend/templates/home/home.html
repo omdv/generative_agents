@@ -1,0 +1,713 @@
+{% extends "base.html" %}
+{% load static %}
+{% load json_filters %}
+
+{% block title %}Generative Agents - Simulator{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- Main Simulation View -->
+    <div class="col-lg-8">
+        <!-- Game Container -->
+        <div id="game-container" class="mb-4" style="min-height: 400px; background-color: #333;">
+            <div class="d-flex justify-content-center align-items-center h-100" id="game-loading">
+                <div class="text-white text-center p-4">
+                    <div class="spinner-border mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p>Loading simulation...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent List -->
+        <h3 class="mb-3">Agents</h3>
+        <div id="agent-list">
+            {% for agent_name in agents %}
+            <div class="agent-card" id="agent-card-{{ agent_name|slugify }}"
+                 style="cursor: pointer;" title="Click to center camera"
+                 onclick="centerOnAgent('{{ agent_name }}')">
+                <div class="d-flex align-items-start">
+                    <img src="/static/assets/characters/{{ agent_name|filename }}.png"
+                         alt="{{ agent_name }}"
+                         class="agent-avatar me-3"
+                         onerror="this.src='/static/assets/the_ville/visuals/map_assets/v1/32_32_general_sheet.png'">
+                    <div class="flex-grow-1">
+                        <h5 class="mb-1">
+                            <span class="agent-emoji me-2"></span>
+                            {{ agent_name }}
+                        </h5>
+                        <p class="text-muted mb-1 agent-action">Idle</p>
+                        <small class="text-secondary agent-location"></small>
+                    </div>
+                </div>
+            </div>
+            {% empty %}
+            <div class="alert alert-info">
+                No agents in simulation. Start a new simulation to see agents here.
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Control Panel -->
+    <div class="col-lg-4">
+        <div class="control-panel sticky-top" style="top: 20px;">
+            <h4 class="mb-3">Control Panel</h4>
+
+            <!-- Status -->
+            <div class="mb-4">
+                <label class="form-label fw-bold">Status</label>
+                <div class="d-flex align-items-center">
+                    <span class="status-indicator status-{{ simulation_state }}"></span>
+                    <span id="simulation-status">{{ simulation_state|title }}</span>
+                    <span id="ws-status" class="ms-auto badge bg-secondary">Disconnected</span>
+                </div>
+            </div>
+
+            <!-- Time Display -->
+            <div class="mb-4">
+                <label class="form-label fw-bold">Game Time</label>
+                <div class="game-time" id="game-time">--:--:--</div>
+                <div class="step-counter">Step: <span id="step-counter">{{ step }}</span></div>
+            </div>
+
+            <!-- Control Buttons -->
+            <div class="mb-4">
+                <label class="form-label fw-bold">Simulation Control</label>
+                <div class="btn-group w-100 mb-2">
+                    <button type="button" class="btn btn-success btn-control" id="btn-start"
+                            {% if simulation_state == 'running' %}disabled{% endif %}>
+                        Start
+                    </button>
+                    <button type="button" class="btn btn-warning btn-control" id="btn-pause"
+                            {% if simulation_state != 'running' %}disabled{% endif %}>
+                        Pause
+                    </button>
+                    <button type="button" class="btn btn-danger btn-control" id="btn-stop"
+                            {% if simulation_state == 'stopped' %}disabled{% endif %}>
+                        Stop
+                    </button>
+                </div>
+                <button type="button" class="btn btn-outline-primary w-100" id="btn-step"
+                        {% if simulation_state == 'stopped' %}disabled{% endif %}>
+                    Step Once
+                </button>
+            </div>
+
+            <!-- Speed Control -->
+            <div class="mb-4">
+                <label class="form-label fw-bold">Speed</label>
+                <div class="d-flex align-items-center">
+                    <input type="range" class="form-range speed-slider me-3" id="speed-slider"
+                           min="0.1" max="5" step="0.1" value="1">
+                    <span id="speed-value">1.0x</span>
+                </div>
+            </div>
+
+            <!-- New Simulation -->
+            <hr>
+            <h5 class="mb-3">New Simulation</h5>
+
+            <div class="mb-3">
+                <label class="form-label">World</label>
+                <select class="form-select" id="world-select">
+                    {% for world in worlds %}
+                    <option value="{{ world }}">{{ world }}</option>
+                    {% empty %}
+                    <option value="the_ville">the_ville</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Agents</label>
+                <div id="agent-selector" style="max-height: 200px; overflow-y: auto;">
+                    {% for personality in personalities %}
+                    <div class="form-check">
+                        <input class="form-check-input agent-checkbox" type="checkbox"
+                               value="{{ personality.name }}"
+                               data-personality-index="{{ forloop.counter0 }}"
+                               id="agent-{{ forloop.counter }}">
+                        <label class="form-check-label" for="agent-{{ forloop.counter }}">
+                            {{ personality.name }}
+                        </label>
+                    </div>
+                    {% empty %}
+                    <small class="text-muted">No personality templates found</small>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Store personality data as JSON in a script tag -->
+            <script id="personalities-data" type="application/json">
+                {{ personalities|to_json }}
+            </script>
+
+            <button type="button" class="btn btn-primary w-100" id="btn-new-simulation">
+                Start New Simulation
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
+<script>
+// ============================================================================
+// PHASER GAME - Adapted from original main_script.html for WebSocket
+// ============================================================================
+
+const TILE_WIDTH = 32;
+const MOVEMENT_SPEED = 32;
+
+// Phaser game globals
+let game = null;
+let cursors = null;
+let player = null;
+let personas = {};
+let pronunciatios = {};
+let preAnimsDirectionDict = {};
+let gameReady = false;
+
+// Agent positions from WebSocket
+let agentPositions = {};
+let pendingMovements = {};
+
+// Phaser configuration
+const config = {
+    type: Phaser.AUTO,
+    width: 1400,
+    height: 750,
+    parent: "game-container",
+    pixelArt: true,
+    physics: {
+        default: "arcade",
+        arcade: { gravity: { y: 0 } }
+    },
+    scene: {
+        preload: preload,
+        create: create,
+        update: update
+    }
+};
+
+function preload() {
+    // Load tileset images
+    this.load.image("blocks_1", "{% static 'assets/the_ville/visuals/map_assets/blocks/blocks_1.png' %}");
+    this.load.image("walls", "{% static 'assets/the_ville/visuals/map_assets/v1/Room_Builder_32x32.png' %}");
+    this.load.image("interiors_pt1", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt1.png' %}");
+    this.load.image("interiors_pt2", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt2.png' %}");
+    this.load.image("interiors_pt3", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt3.png' %}");
+    this.load.image("interiors_pt4", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt4.png' %}");
+    this.load.image("interiors_pt5", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt5.png' %}");
+    this.load.image("CuteRPG_Field_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Field_B.png' %}");
+    this.load.image("CuteRPG_Field_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Field_C.png' %}");
+    this.load.image("CuteRPG_Harbor_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Harbor_C.png' %}");
+    this.load.image("CuteRPG_Village_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Village_B.png' %}");
+    this.load.image("CuteRPG_Forest_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Forest_B.png' %}");
+    this.load.image("CuteRPG_Desert_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Desert_C.png' %}");
+    this.load.image("CuteRPG_Mountains_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Mountains_B.png' %}");
+    this.load.image("CuteRPG_Desert_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Desert_B.png' %}");
+    this.load.image("CuteRPG_Forest_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Forest_C.png' %}");
+
+    // Load Tiled map
+    this.load.tilemapTiledJSON("map", "{% static 'assets/the_ville/visuals/the_ville_jan7.json' %}");
+
+    // Load character atlas
+    this.load.atlas("atlas",
+        "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.png",
+        "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.json");
+}
+
+function create() {
+    // Hide loading spinner - remove it completely
+    const loading = document.getElementById('game-loading');
+    if (loading) {
+        loading.remove();
+    }
+
+    // Create tilemap
+    const map = this.make.tilemap({ key: "map" });
+
+    // Add tilesets
+    const collisions = map.addTilesetImage("blocks", "blocks_1");
+    const walls = map.addTilesetImage("Room_Builder_32x32", "walls");
+    const interiors_pt1 = map.addTilesetImage("interiors_pt1", "interiors_pt1");
+    const interiors_pt2 = map.addTilesetImage("interiors_pt2", "interiors_pt2");
+    const interiors_pt3 = map.addTilesetImage("interiors_pt3", "interiors_pt3");
+    const interiors_pt4 = map.addTilesetImage("interiors_pt4", "interiors_pt4");
+    const interiors_pt5 = map.addTilesetImage("interiors_pt5", "interiors_pt5");
+    const CuteRPG_Field_B = map.addTilesetImage("CuteRPG_Field_B", "CuteRPG_Field_B");
+    const CuteRPG_Field_C = map.addTilesetImage("CuteRPG_Field_C", "CuteRPG_Field_C");
+    const CuteRPG_Harbor_C = map.addTilesetImage("CuteRPG_Harbor_C", "CuteRPG_Harbor_C");
+    const CuteRPG_Village_B = map.addTilesetImage("CuteRPG_Village_B", "CuteRPG_Village_B");
+    const CuteRPG_Forest_B = map.addTilesetImage("CuteRPG_Forest_B", "CuteRPG_Forest_B");
+    const CuteRPG_Desert_C = map.addTilesetImage("CuteRPG_Desert_C", "CuteRPG_Desert_C");
+    const CuteRPG_Mountains_B = map.addTilesetImage("CuteRPG_Mountains_B", "CuteRPG_Mountains_B");
+    const CuteRPG_Desert_B = map.addTilesetImage("CuteRPG_Desert_B", "CuteRPG_Desert_B");
+    const CuteRPG_Forest_C = map.addTilesetImage("CuteRPG_Forest_C", "CuteRPG_Forest_C");
+
+    // Create layers
+    const tileset_group_1 = [CuteRPG_Field_B, CuteRPG_Field_C, CuteRPG_Harbor_C, CuteRPG_Village_B,
+        CuteRPG_Forest_B, CuteRPG_Desert_C, CuteRPG_Mountains_B, CuteRPG_Desert_B, CuteRPG_Forest_C,
+        interiors_pt1, interiors_pt2, interiors_pt3, interiors_pt4, interiors_pt5, walls];
+
+    map.createLayer("Bottom Ground", tileset_group_1, 0, 0);
+    map.createLayer("Exterior Ground", tileset_group_1, 0, 0);
+    map.createLayer("Exterior Decoration L1", tileset_group_1, 0, 0);
+    map.createLayer("Exterior Decoration L2", tileset_group_1, 0, 0);
+    map.createLayer("Interior Ground", tileset_group_1, 0, 0);
+    map.createLayer("Wall", [CuteRPG_Field_C, walls], 0, 0);
+    map.createLayer("Interior Furniture L1", tileset_group_1, 0, 0);
+    map.createLayer("Interior Furniture L2 ", tileset_group_1, 0, 0);
+    const foregroundL1Layer = map.createLayer("Foreground L1", tileset_group_1, 0, 0);
+    const foregroundL2Layer = map.createLayer("Foreground L2", tileset_group_1, 0, 0);
+    foregroundL1Layer.setDepth(2);
+    foregroundL2Layer.setDepth(2);
+
+    const collisionsLayer = map.createLayer("Collisions", collisions, 0, 0);
+    collisionsLayer.setCollisionByProperty({ collide: true });
+    collisionsLayer.setDepth(-1);
+
+    // Create camera player (invisible, for camera control)
+    player = this.physics.add.sprite(2200, 1400, "atlas", "misa-front").setSize(30, 40).setOffset(0, 0);
+    player.setDepth(-1);
+
+    // Setup camera
+    const camera = this.cameras.main;
+    camera.startFollow(player);
+    camera.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
+    cursors = this.input.keyboard.createCursorKeys();
+
+    // Create walking animations
+    const anims = this.anims;
+    anims.create({
+        key: "misa-left-walk",
+        frames: anims.generateFrameNames("atlas", { prefix: "misa-left-walk.", start: 0, end: 3, zeroPad: 3 }),
+        frameRate: 4,
+        repeat: -1
+    });
+    anims.create({
+        key: "misa-right-walk",
+        frames: anims.generateFrameNames("atlas", { prefix: "misa-right-walk.", start: 0, end: 3, zeroPad: 3 }),
+        frameRate: 4,
+        repeat: -1
+    });
+    anims.create({
+        key: "misa-front-walk",
+        frames: anims.generateFrameNames("atlas", { prefix: "misa-front-walk.", start: 0, end: 3, zeroPad: 3 }),
+        frameRate: 4,
+        repeat: -1
+    });
+    anims.create({
+        key: "misa-back-walk",
+        frames: anims.generateFrameNames("atlas", { prefix: "misa-back-walk.", start: 0, end: 3, zeroPad: 3 }),
+        frameRate: 4,
+        repeat: -1
+    });
+
+    // Add WASD keys
+    this.wasd = this.input.keyboard.addKeys({
+        up: Phaser.Input.Keyboard.KeyCodes.W,
+        down: Phaser.Input.Keyboard.KeyCodes.S,
+        left: Phaser.Input.Keyboard.KeyCodes.A,
+        right: Phaser.Input.Keyboard.KeyCodes.D
+    });
+
+    // Add mouse drag for panning
+    this.input.on('pointermove', function (pointer) {
+        if (pointer.isDown) {
+            player.x -= (pointer.x - pointer.prevPosition.x) / camera.zoom;
+            player.y -= (pointer.y - pointer.prevPosition.y) / camera.zoom;
+        }
+    });
+
+    // Add mouse wheel for zoom
+    this.input.on('wheel', function (pointer, gameObjects, deltaX, deltaY, deltaZ) {
+        const zoomChange = deltaY > 0 ? -0.1 : 0.1;
+        camera.zoom = Phaser.Math.Clamp(camera.zoom + zoomChange, 0.25, 2);
+    });
+
+    gameReady = true;
+    console.log("Phaser game ready - Use WASD/arrows to pan, mouse drag to pan, scroll to zoom");
+}
+
+function update(time, delta) {
+    if (!gameReady) return;
+
+    // Camera movement with arrow keys and WASD
+    const cameraSpeed = 400;
+    player.body.setVelocity(0);
+
+    const left = cursors.left.isDown || this.wasd.left.isDown;
+    const right = cursors.right.isDown || this.wasd.right.isDown;
+    const up = cursors.up.isDown || this.wasd.up.isDown;
+    const down = cursors.down.isDown || this.wasd.down.isDown;
+
+    if (left) player.body.setVelocityX(-cameraSpeed);
+    if (right) player.body.setVelocityX(cameraSpeed);
+    if (up) player.body.setVelocityY(-cameraSpeed);
+    if (down) player.body.setVelocityY(cameraSpeed);
+
+    // Update agent positions from WebSocket data
+    for (const [name, targetPos] of Object.entries(pendingMovements)) {
+        if (!personas[name]) continue;
+
+        const sprite = personas[name];
+        const label = pronunciatios[name];
+        const targetX = targetPos.x * TILE_WIDTH;
+        const targetY = targetPos.y * TILE_WIDTH;
+
+        let animDir = "";
+        if (sprite.body.x < targetX) {
+            sprite.body.x = Math.min(sprite.body.x + MOVEMENT_SPEED, targetX);
+            animDir = "r";
+        } else if (sprite.body.x > targetX) {
+            sprite.body.x = Math.max(sprite.body.x - MOVEMENT_SPEED, targetX);
+            animDir = "l";
+        } else if (sprite.body.y < targetY) {
+            sprite.body.y = Math.min(sprite.body.y + MOVEMENT_SPEED, targetY);
+            animDir = "d";
+        } else if (sprite.body.y > targetY) {
+            sprite.body.y = Math.max(sprite.body.y - MOVEMENT_SPEED, targetY);
+            animDir = "u";
+        }
+
+        // Update label position
+        if (label) {
+            label.x = sprite.body.x - 6;
+            label.y = sprite.body.y - 74;
+        }
+
+        // Play animation
+        if (animDir === "l") sprite.anims.play("misa-left-walk", true);
+        else if (animDir === "r") sprite.anims.play("misa-right-walk", true);
+        else if (animDir === "u") sprite.anims.play("misa-back-walk", true);
+        else if (animDir === "d") sprite.anims.play("misa-front-walk", true);
+        else {
+            sprite.anims.stop();
+            const dir = preAnimsDirectionDict[name] || "d";
+            if (dir === "l") sprite.setTexture("atlas", "misa-left");
+            else if (dir === "r") sprite.setTexture("atlas", "misa-right");
+            else if (dir === "u") sprite.setTexture("atlas", "misa-back");
+            else sprite.setTexture("atlas", "misa-front");
+        }
+
+        if (animDir) preAnimsDirectionDict[name] = animDir;
+    }
+}
+
+// Create agent sprite in the game
+function createAgentSprite(scene, name, x, y) {
+    const startX = x * TILE_WIDTH + TILE_WIDTH / 2;
+    const startY = y * TILE_WIDTH + TILE_WIDTH;
+
+    const sprite = scene.physics.add.sprite(startX, startY, "atlas", "misa-front")
+        .setSize(30, 40)
+        .setOffset(0, 32);
+    sprite.setDepth(1);
+
+    // Get initials for label
+    const rgx = new RegExp(/(\p{L}{1})\p{L}+/, 'gu');
+    let initials = [...name.matchAll(rgx)] || [];
+    initials = ((initials.shift()?.[1] || '') + (initials.pop()?.[1] || '')).toUpperCase();
+
+    const label = scene.add.text(sprite.body.x - 6, sprite.body.y - 74, initials + ": 💭", {
+        font: "24px monospace",
+        fill: "#000000",
+        padding: { x: 8, y: 8 },
+        backgroundColor: "#ffffff"
+    }).setDepth(3);
+
+    personas[name] = sprite;
+    pronunciatios[name] = label;
+    preAnimsDirectionDict[name] = "d";
+
+    return sprite;
+}
+
+// Update agent from WebSocket message
+function updateAgentFromWS(name, position, emoji, action) {
+    if (!gameReady) {
+        console.log(`Game not ready, skipping agent ${name}`);
+        return;
+    }
+
+    // Create sprite if doesn't exist
+    if (!personas[name] && game && game.scene && game.scene.scenes[0]) {
+        console.log(`Creating sprite for ${name} at tile (${position[0]}, ${position[1]}) = pixel (${position[0]*32}, ${position[1]*32})`);
+        createAgentSprite(game.scene.scenes[0], name, position[0], position[1]);
+
+        // Center camera on first agent created
+        if (Object.keys(personas).length === 1) {
+            const pixelX = position[0] * TILE_WIDTH;
+            const pixelY = position[1] * TILE_WIDTH;
+            player.setPosition(pixelX, pixelY);
+            console.log(`Camera centered on ${name} at (${pixelX}, ${pixelY})`);
+        }
+    }
+
+    // Set target position for smooth movement
+    pendingMovements[name] = { x: position[0], y: position[1] };
+
+    // Update label
+    if (pronunciatios[name]) {
+        const rgx = new RegExp(/(\p{L}{1})\p{L}+/, 'gu');
+        let initials = [...name.matchAll(rgx)] || [];
+        initials = ((initials.shift()?.[1] || '') + (initials.pop()?.[1] || '')).toUpperCase();
+        pronunciatios[name].setText(initials + ": " + (emoji || "💭"));
+    }
+
+    // Store agent position for camera centering
+    agentPositions[name] = { x: position[0], y: position[1] };
+}
+
+// Center camera on a specific agent
+function centerOnAgent(name) {
+    const pos = agentPositions[name];
+    if (pos && player) {
+        const pixelX = pos.x * TILE_WIDTH;
+        const pixelY = pos.y * TILE_WIDTH;
+        player.setPosition(pixelX, pixelY);
+        console.log(`Camera centered on ${name}`);
+    }
+}
+
+// Initialize game
+game = new Phaser.Game(config);
+
+// ============================================================================
+// WEBSOCKET & UI CODE
+// ============================================================================
+
+// WebSocket connection
+let ws = null;
+let reconnectAttempts = 0;
+
+function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${window.location.host}/ws/simulation/`);
+
+    ws.onopen = function() {
+        document.getElementById('ws-status').textContent = 'Connected';
+        document.getElementById('ws-status').className = 'ms-auto badge bg-success';
+        reconnectAttempts = 0;
+    };
+
+    ws.onclose = function() {
+        document.getElementById('ws-status').textContent = 'Disconnected';
+        document.getElementById('ws-status').className = 'ms-auto badge bg-secondary';
+
+        // Reconnect after delay
+        if (reconnectAttempts < 5) {
+            reconnectAttempts++;
+            setTimeout(connectWebSocket, 2000 * reconnectAttempts);
+        }
+    };
+
+    ws.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+    };
+}
+
+function handleWebSocketMessage(data) {
+    console.log('WS message:', data.type, data);
+
+    if (data.type === 'step') {
+        console.log(`Step ${data.step}: ${Object.keys(data.agents || {}).length} agents`);
+        updateSimulationState(data);
+    } else if (data.type === 'state') {
+        // State response has nested state object
+        const state = data.state || data;
+        console.log(`State: ${Object.keys(state.agents || {}).length} agents`);
+        updateSimulationState(state);
+    } else if (data.type === 'connection_established') {
+        // Handle initial state on connection
+        if (data.state) {
+            updateSimulationState(data.state);
+            updateStatus(data.state.state || 'stopped');
+        }
+    } else if (data.type === 'simulation_started') {
+        updateStatus('running');
+        // Create agent cards and sprites for the new agents
+        if (data.agents && Array.isArray(data.agents)) {
+            const agentList = document.getElementById('agent-list');
+            agentList.innerHTML = '';  // Clear existing
+            data.agents.forEach(name => {
+                const card = document.createElement('div');
+                card.className = 'agent-card';
+                card.id = `agent-card-${name.toLowerCase().replace(/\s+/g, '-')}`;
+                card.style.cursor = 'pointer';
+                card.title = 'Click to center camera on this agent';
+                card.innerHTML = `
+                    <div class="d-flex align-items-start">
+                        <img src="/static/assets/characters/${name.replace(/ /g, '_')}.png"
+                             alt="${name}"
+                             class="agent-avatar me-3"
+                             onerror="this.src='/static/assets/the_ville/visuals/map_assets/v1/32_32_general_sheet.png'">
+                        <div class="flex-grow-1">
+                            <h5 class="mb-1">
+                                <span class="agent-emoji me-2">💭</span>
+                                ${name}
+                            </h5>
+                            <p class="text-muted mb-1 agent-action">Starting...</p>
+                            <small class="text-secondary agent-location"></small>
+                        </div>
+                    </div>
+                `;
+                card.addEventListener('click', () => centerOnAgent(name));
+                agentList.appendChild(card);
+            });
+        }
+        // Request full state to get agent positions
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'get_state' }));
+        }
+    } else if (data.type === 'simulation_stopped') {
+        updateStatus('stopped');
+    } else if (data.type === 'simulation_paused') {
+        updateStatus('paused');
+    } else if (data.type === 'simulation_resumed') {
+        updateStatus('running');
+    }
+}
+
+function updateSimulationState(data) {
+    // Update step counter
+    if (data.step !== undefined) {
+        document.getElementById('step-counter').textContent = data.step;
+    }
+
+    // Update game time
+    if (data.game_time) {
+        const time = new Date(data.game_time);
+        document.getElementById('game-time').textContent =
+            time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    // Update agent states
+    if (data.agents) {
+        console.log(`Updating ${Object.keys(data.agents).length} agents:`, Object.keys(data.agents));
+        for (const [name, state] of Object.entries(data.agents)) {
+            console.log(`  ${name}: pos=${JSON.stringify(state.position)}, action=${state.action}`);
+            // Update Phaser game sprites
+            if (state.position) {
+                updateAgentFromWS(name, state.position, state.emoji, state.action);
+            }
+
+            // Update UI cards
+            const card = document.querySelector(`#agent-card-${name.toLowerCase().replace(/\s+/g, '-')}`);
+            if (card) {
+                const actionEl = card.querySelector('.agent-action');
+                const locationEl = card.querySelector('.agent-location');
+                const emojiEl = card.querySelector('.agent-emoji');
+
+                if (actionEl && state.action) {
+                    actionEl.textContent = state.action;
+                }
+                if (locationEl && state.address) {
+                    locationEl.textContent = state.address;
+                }
+                if (emojiEl && state.emoji) {
+                    emojiEl.textContent = state.emoji;
+                }
+            }
+        }
+    }
+}
+
+function updateStatus(status) {
+    const statusEl = document.getElementById('simulation-status');
+    const indicatorEl = statusEl.previousElementSibling;
+
+    statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    indicatorEl.className = `status-indicator status-${status}`;
+
+    // Update button states
+    document.getElementById('btn-start').disabled = (status === 'running');
+    document.getElementById('btn-pause').disabled = (status !== 'running');
+    document.getElementById('btn-stop').disabled = (status === 'stopped');
+    document.getElementById('btn-step').disabled = (status === 'stopped');
+}
+
+// API calls
+async function apiCall(endpoint, method = 'POST', body = null) {
+    const options = {
+        method: method,
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    };
+    if (body) {
+        options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(`/api/${endpoint}`, options);
+    return response.json();
+}
+
+// Event handlers
+document.getElementById('btn-start').addEventListener('click', async () => {
+    await apiCall('simulation/resume');
+});
+
+document.getElementById('btn-pause').addEventListener('click', async () => {
+    await apiCall('simulation/pause');
+});
+
+document.getElementById('btn-stop').addEventListener('click', async () => {
+    await apiCall('simulation/stop');
+});
+
+document.getElementById('btn-step').addEventListener('click', async () => {
+    await apiCall('simulation/step');
+});
+
+document.getElementById('speed-slider').addEventListener('input', (e) => {
+    const speed = parseFloat(e.target.value);
+    document.getElementById('speed-value').textContent = speed.toFixed(1) + 'x';
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'set_speed', speed: speed }));
+    }
+});
+
+// Load personalities data from embedded JSON
+const personalitiesData = JSON.parse(document.getElementById('personalities-data').textContent || '[]');
+
+document.getElementById('btn-new-simulation').addEventListener('click', async () => {
+    const world = document.getElementById('world-select').value;
+    const checkboxes = document.querySelectorAll('.agent-checkbox:checked');
+
+    const agents = [];
+    checkboxes.forEach(cb => {
+        const index = parseInt(cb.dataset.personalityIndex, 10);
+        if (!isNaN(index) && personalitiesData[index]) {
+            agents.push(personalitiesData[index]);
+        }
+    });
+
+    if (agents.length === 0) {
+        alert('Please select at least one agent');
+        return;
+    }
+
+    const result = await apiCall('simulation/start', 'POST', {
+        world: world,
+        agents: agents,
+    });
+
+    if (result.status === 'ok') {
+        location.reload();
+    } else {
+        alert('Failed to start simulation: ' + result.message);
+    }
+});
+
+// Initialize
+connectWebSocket();
+</script>
+{% endblock %}
